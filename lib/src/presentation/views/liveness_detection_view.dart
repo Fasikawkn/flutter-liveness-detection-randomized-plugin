@@ -245,38 +245,9 @@ class _LivenessDetectionScreenState extends State<LivenessDetectionView> {
   }
 
   Future<void> _processCameraImage(CameraImage cameraImage) async {
-    final WriteBuffer allBytes = WriteBuffer();
-    for (final Plane plane in cameraImage.planes) {
-      allBytes.putUint8List(plane.bytes);
-    }
-    final bytes = allBytes.done().buffer.asUint8List();
-
-    final Size imageSize = Size(
-      cameraImage.width.toDouble(),
-      cameraImage.height.toDouble(),
-    );
-
     final camera = availableCams[_cameraIndex];
-    final imageRotation =
-        InputImageRotationValue.fromRawValue(camera.sensorOrientation);
-    if (imageRotation == null) return;
-
-    final inputImageFormat =
-        InputImageFormatValue.fromRawValue(cameraImage.format.raw);
-    if (inputImageFormat == null) return;
-
-    final inputImageData = InputImageMetadata(
-      size: imageSize,
-      rotation: imageRotation,
-      format: inputImageFormat,
-      bytesPerRow: cameraImage.planes[0].bytesPerRow,
-    );
-
-    final inputImage = InputImage.fromBytes(
-      metadata: inputImageData,
-      bytes: bytes,
-    );
-
+    final inputImage = CameraImageUtils.toInputImage(cameraImage, camera);
+    if (inputImage == null) return;
     _processImage(inputImage);
   }
 
@@ -294,23 +265,30 @@ class _LivenessDetectionScreenState extends State<LivenessDetectionView> {
         if (mounted) setState(() => _faceDetectedState = false);
       } else {
         if (mounted) setState(() => _faceDetectedState = true);
-        final currentIndex = _stepsKey.currentState?.currentIndex ?? 0;
-        if (widget.config.useCustomizedLabel) {
-          if (currentIndex <
-              customizedLivenessLabel(widget.config.customizedLabel!).length) {
-            _detectFace(
-              face: faces.first,
-              step: customizedLivenessLabel(
-                      widget.config.customizedLabel!)[currentIndex]
-                  .step,
-            );
-          }
+        
+        // If allowDetectionSteps is false, skip steps and directly take picture
+        if (!widget.config.allowDetectionSteps) {
+          _takePicture();
         } else {
-          if (currentIndex < stepLiveness.length) {
-            _detectFace(
-              face: faces.first,
-              step: stepLiveness[currentIndex].step,
-            );
+          // Normal flow with detection steps
+          final currentIndex = _stepsKey.currentState?.currentIndex ?? 0;
+          if (widget.config.useCustomizedLabel) {
+            if (currentIndex <
+                customizedLivenessLabel(widget.config.customizedLabel!).length) {
+              _detectFace(
+                face: faces.first,
+                step: customizedLivenessLabel(
+                        widget.config.customizedLabel!)[currentIndex]
+                    .step,
+              );
+            }
+          } else {
+            if (currentIndex < stepLiveness.length) {
+              _detectFace(
+                face: faces.first,
+                step: stepLiveness[currentIndex].step,
+              );
+            }
           }
         }
       }
@@ -478,12 +456,17 @@ class _LivenessDetectionScreenState extends State<LivenessDetectionView> {
           showDurationUiText: widget.config.showDurationUiText,
           isDarkMode: widget.isDarkMode,
           isFaceDetected: _faceDetectedState,
-          camera: CameraPreview(_cameraController!),
+          camera: Transform(
+            alignment: Alignment.center,
+            transform: Matrix4.rotationY(3.14159),
+            child: CameraPreview(_cameraController!),
+          ),
           key: _stepsKey,
           steps: widget.config.useCustomizedLabel
               ? customizedLivenessLabel(widget.config.customizedLabel!)
               : stepLiveness,
           showCurrentStep: widget.showCurrentStep,
+          showStepLabel: widget.config.allowDetectionSteps, // Pass config to hide/show step labels
           onCompleted: () => Future.delayed(
             const Duration(milliseconds: 500),
             () => _takePicture(),
@@ -503,9 +486,9 @@ class _LivenessDetectionScreenState extends State<LivenessDetectionView> {
         as LivenessThresholdBlink?;
 
     if ((face.leftEyeOpenProbability ?? 1.0) <
-            (blinkThreshold?.leftEyeProbability ?? 0.25) &&
+            (blinkThreshold?.leftEyeProbability ?? 0.05) &&
         (face.rightEyeOpenProbability ?? 1.0) <
-            (blinkThreshold?.rightEyeProbability ?? 0.25)) {
+            (blinkThreshold?.rightEyeProbability ?? 0.05)) {
       _startProcessing();
       await _completeStep(step: step);
     }
@@ -603,9 +586,8 @@ class _LivenessDetectionScreenState extends State<LivenessDetectionView> {
             .instance.thresholdConfig
             .firstWhereOrNull((p0) => p0 is LivenessThresholdSmile)
         as LivenessThresholdSmile?;
-
     if ((face.smilingProbability ?? 0) >
-        (smileThreshold?.probability ?? 0.65)) {
+        (smileThreshold?.probability ?? 0.99)) {
       _startProcessing();
       await _completeStep(step: step);
     }
